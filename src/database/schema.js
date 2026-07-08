@@ -7,7 +7,7 @@ import {
   getCacheDuration
 } from '../utils/cache.js';
 import { saveSiteOptions, debug, getSettingByKey } from '../utils/settings.js';
-import { ensureServerOptimization, buildHistoryId } from './indexOptimization.js';
+import { ensureServerOptimization, buildHistoryId, getServerHistoryPartitionId, getHistoryIdRange } from './indexOptimization.js';
 import { addHistoryColumns, ensureHistoryIndex } from './updateDatabase.js';
 
 let dbInitialized = false;
@@ -201,68 +201,117 @@ export async function getMetricsHistory(db, serverId, hours, columns) {
   const thisSunday = new Date(Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth(), nowDate.getUTCDate() - day));
   const needOldTable = cutoff < thisSunday.getTime();
   
-  // 检查 metrics_history_old 表是否存在
-  let oldTableExists = false;
-  if (needOldTable) {
-    const oldTable = await db.prepare(
-      `SELECT name FROM sqlite_master WHERE type='table' AND name='metrics_history_old'`
-    ).first();
-    oldTableExists = !!oldTable;
-  }
+  const oldTableExists = needOldTable && !!await db.prepare(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='metrics_history_old'`
+  ).first();
 
   let rawResult;
-  
-  if (needOldTable && oldTableExists) {
-    // 跨周查询，使用 UNION ALL 合并两个表
-    debug('[History] 跨周查询，合并 metrics_history 和 metrics_history_old');
 
-    rawResult = await db.prepare(`
-      WITH sampled AS (
-        SELECT 
-          timestamp, 
-          ${columns},
-          ROW_NUMBER() OVER (
-            PARTITION BY CAST(timestamp / ? AS INTEGER)
-            ORDER BY timestamp
-          ) AS rn
-        FROM (
-          SELECT timestamp, ${columns} FROM metrics_history
-          WHERE server_id = ?
-            AND typeof(timestamp) = 'integer'
-            AND timestamp >= ?
-          
-          UNION ALL
-          
-          SELECT timestamp, ${columns} FROM metrics_history_old
+  const history_id_optimized = await getSettingByKey(db, 'history_id_optimized', true);
+  if (history_id_optimized) {
+    const partitionId = await getServerHistoryPartitionId(db, serverId);
+    const { startId, endId } = getHistoryIdRange(partitionId, cutoff);
+
+    if (oldTableExists) {
+      debug('[History] 跨周查询，合并 metrics_history 和 metrics_history_old');
+
+      rawResult = await db.prepare(`
+        WITH sampled AS (
+          SELECT
+            timestamp,
+            ${columns},
+            ROW_NUMBER() OVER (
+              PARTITION BY CAST(timestamp / ? AS INTEGER)
+              ORDER BY timestamp
+            ) AS rn
+          FROM (
+            SELECT timestamp, ${columns} FROM metrics_history
+            WHERE id >= ?
+              AND id <= ?
+
+            UNION ALL
+
+            SELECT timestamp, ${columns} FROM metrics_history_old
+            WHERE id >= ?
+              AND id <= ?
+          )
+        )
+        SELECT timestamp, ${columns}
+        FROM sampled
+        WHERE rn = 1
+      `).bind(intervalMs, startId, endId, startId, endId).all();
+    } else {
+      rawResult = await db.prepare(`
+        WITH sampled AS (
+          SELECT
+            timestamp,
+            ${columns},
+            ROW_NUMBER() OVER (
+              PARTITION BY CAST(timestamp / ? AS INTEGER)
+              ORDER BY timestamp
+            ) AS rn
+          FROM metrics_history
+          WHERE id >= ?
+            AND id <= ?
+        )
+        SELECT timestamp, ${columns}
+        FROM sampled
+        WHERE rn = 1
+      `).bind(intervalMs, startId, endId).all();
+    }
+  } else {
+    if (oldTableExists) {
+      // 跨周查询，使用 UNION ALL 合并两个表
+      debug('[History] 跨周查询，合并 metrics_history 和 metrics_history_old');
+
+      rawResult = await db.prepare(`
+        WITH sampled AS (
+          SELECT
+            timestamp,
+            ${columns},
+            ROW_NUMBER() OVER (
+              PARTITION BY CAST(timestamp / ? AS INTEGER)
+              ORDER BY timestamp
+            ) AS rn
+          FROM (
+            SELECT timestamp, ${columns} FROM metrics_history
+            WHERE server_id = ?
+              AND typeof(timestamp) = 'integer'
+              AND timestamp >= ?
+
+            UNION ALL
+
+            SELECT timestamp, ${columns} FROM metrics_history_old
+            WHERE server_id = ?
+              AND typeof(timestamp) = 'integer'
+              AND timestamp >= ?
+          )
+        )
+        SELECT timestamp, ${columns}
+        FROM sampled
+        WHERE rn = 1
+      `).bind(intervalMs, serverId, cutoff, serverId, cutoff).all();
+    } else {
+      // 单表查询
+      rawResult = await db.prepare(`
+        WITH sampled AS (
+          SELECT
+            timestamp,
+            ${columns},
+            ROW_NUMBER() OVER (
+              PARTITION BY CAST(timestamp / ? AS INTEGER)
+              ORDER BY timestamp
+            ) AS rn
+          FROM metrics_history
           WHERE server_id = ?
             AND typeof(timestamp) = 'integer'
             AND timestamp >= ?
         )
-      )
-      SELECT timestamp, ${columns}
-      FROM sampled
-      WHERE rn = 1
-    `).bind(intervalMs, serverId, cutoff, serverId, cutoff).all();
-  } else {
-    // 单表查询
-    rawResult = await db.prepare(`
-      WITH sampled AS (
-        SELECT 
-          timestamp, 
-          ${columns},
-          ROW_NUMBER() OVER (
-            PARTITION BY CAST(timestamp / ? AS INTEGER)
-            ORDER BY timestamp
-          ) AS rn
-        FROM metrics_history
-        WHERE server_id = ?
-          AND typeof(timestamp) = 'integer'
-          AND timestamp >= ?
-      )
-      SELECT timestamp, ${columns}
-      FROM sampled
-      WHERE rn = 1
-    `).bind(intervalMs, serverId, cutoff).all();
+        SELECT timestamp, ${columns}
+        FROM sampled
+        WHERE rn = 1
+      `).bind(intervalMs, serverId, cutoff).all();
+    }
   }
 
   const result = rawResult.results.map(row => ({
@@ -413,13 +462,18 @@ export async function saveMetricsHistory(db, serverId, historyPartitionId, metri
 
 export async function getLatestMetrics(db, serverId) {
   try {
-    const result = await db.prepare(`
-      SELECT * FROM metrics_history 
-      WHERE server_id = ? 
-      ORDER BY timestamp DESC 
+    const partitionId = await getServerHistoryPartitionId(db, serverId);
+    debug(`Server ${serverId} history_partition_id: ${partitionId}`);
+
+    const { startId, endId } = getHistoryIdRange(partitionId);
+    debug(`Server ${serverId} history_id_range: ${startId} - ${endId}`);
+    const  result = await db.prepare(`
+      SELECT * FROM metrics_history
+      WHERE id >= ?
+        AND id <= ?
+      ORDER BY id DESC
       LIMIT 1
-    `).bind(serverId).first();
-    
+    `).bind(startId, endId).first();
     return result || null;
   } catch (e) {
     console.error('获取最新指标数据失败:', e);

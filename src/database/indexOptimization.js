@@ -4,6 +4,7 @@ import { getAllServers, clearServersListCache } from '../utils/cache.js';
 export const HISTORY_PARTITION_MULTIPLIER = 10000000000000;
 export const HISTORY_AUTO_OPTIMIZED_MIN_ID = HISTORY_PARTITION_MULTIPLIER;
 export const HISTORY_MAX_PARTITION_ID = 900;
+export const HISTORY_MAX_TIME_KEY = 991231235959;
 
 // 确保servers历史记录分区优化
 export async function ensureServerOptimization(db) {
@@ -139,5 +140,35 @@ export function buildHistoryId(partitionId, timestamp) {
   if (!normalizedPartitionId) {
     throw new Error('Invalid history partition id');
   }
-  return normalizedPartitionId * 10000000000000 + formatHistoryTimeKey(timestamp);
+  return normalizedPartitionId * HISTORY_PARTITION_MULTIPLIER + formatHistoryTimeKey(timestamp);
+}
+
+
+export async function getServerHistoryPartitionId(db, serverId) {
+  const servers = await getAllServers(db, true);
+  const server = servers.find(s => s.id === serverId);
+  if (!server) {
+    debug(`Server ${serverId} not found`);
+    throw new Error(`Server ${serverId} not found`);
+  }else{
+    debug(`Server ${serverId} history_partition_id: ${server.history_partition_id}`);
+  }
+  return server.history_partition_id;
+}
+
+export function getHistoryIdRange(partitionId, startTimestamp = null, endTimestamp = null) {
+  const normalizedPartitionId = normalizeHistoryPartitionId(partitionId);
+  if (!normalizedPartitionId) {
+    throw new Error('Invalid history partition id');
+  }
+
+  const prefix = normalizedPartitionId * HISTORY_PARTITION_MULTIPLIER;
+  return {
+    startId: prefix + (startTimestamp === null || startTimestamp === undefined
+      ? 0
+      : formatHistoryTimeKey(startTimestamp)),
+    endId: prefix + (endTimestamp === null || endTimestamp === undefined
+      ? HISTORY_MAX_TIME_KEY
+      : formatHistoryTimeKey(endTimestamp))
+  };
 }
