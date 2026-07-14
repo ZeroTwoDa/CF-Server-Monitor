@@ -198,13 +198,13 @@ async function initApp() {
     try {
       const results = await fetchAllTurnstileConfigs()
       const enabledTurnstileSites = getTurnstileEnabledSites(results, 'global')
-      if (hasTurnstileSiteKeyMismatch(enabledTurnstileSites)) {
-        showTurnstileSiteKeyMismatch()
-        return
-      }
       const first = results.find(r => !r.error && r.data)
       const sharedTurnstileSite = enabledTurnstileSites[0] || null
       const privateAccess = getPrivateAccessState(results)
+      if (!privateAccess.hasPrivateSite && hasTurnstileSiteKeyMismatch(enabledTurnstileSites)) {
+        showTurnstileSiteKeyMismatch()
+        return
+      }
       config = first ? {
         turnstile_enabled: isTurnstileValueEnabled(first.data.turnstile_enabled),
         turnstile_login_enabled: isTurnstileValueEnabled(first.data.turnstile_login_enabled),

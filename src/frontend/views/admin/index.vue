@@ -529,7 +529,7 @@ const { visibility: passwordVisible, toggle: togglePassword } = usePasswordVisib
 
 const {
   turnstileEnabled, turnstileLoginEnabled, turnstileSiteKey,
-  turnstileToken, turnstileVerified, turnstileBlocked,
+  turnstileToken, turnstileVerified,
   hasSharedTurnstileVerified, loadTurnstileConfig: loadTurnstileConfigBase,
   renderTurnstile, resetTurnstile, clearTurnstile
 } = useTurnstile()
@@ -639,12 +639,6 @@ const handleLogin = async () => {
   loginError.value = ''
   loginLoading.value = true
 
-  if (turnstileBlocked.value) {
-    loginError.value = trans.value.turnstileSiteKeyMismatchDesc
-    loginLoading.value = false
-    return
-  }
-
   if (turnstileLoginEnabled.value && !turnstileToken.value) {
     loginError.value = 'Please complete the verification'
     loginLoading.value = false
@@ -666,7 +660,7 @@ const handleLogin = async () => {
     loadSettings()
     loadServers()
   } else {
-    loginError.value = trans.value.errorInvalidUsername
+    loginError.value = result.status === 403 ? 'Please complete the verification' : trans.value.errorInvalidUsername
     loginForm.value.password = ''
     clearTurnstile()
     resetTurnstile('#admin-turnstile-container')
@@ -703,7 +697,7 @@ const initAdmin = async () => {
 }
 
 const loadTurnstileConfig = async () => {
-  await loadTurnstileConfigBase(selectedApiIndex.value, isMultipleMode.value, loginError, trans)
+  await loadTurnstileConfigBase(selectedApiIndex.value, isMultipleMode.value, loginError)
   if (turnstileSiteKey.value && (turnstileLoginEnabled.value || (turnstileEnabled.value && !turnstileVerified.value))) {
     await nextTick()
     renderTurnstile('#admin-turnstile-container', turnstileSiteKey.value)

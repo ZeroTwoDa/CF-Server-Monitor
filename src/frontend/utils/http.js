@@ -15,7 +15,8 @@ const getAdminHash = () => {
 
 const createHeaders = (includeAuth = true, includeTurnstile = true, baseUrl = null, options = {}) => {
   const {
-    includeTurnstileToken = includeTurnstile
+    includeTurnstileToken = includeTurnstile,
+    includeTurnstileVerified = true
   } = options
   const headers = {
     'Content-Type': 'application/json'
@@ -35,9 +36,11 @@ const createHeaders = (includeAuth = true, includeTurnstile = true, baseUrl = nu
     }
   }
 
-  const turnstileVerified = localStorage.getItem(TURNSTILE_VERIFIED_KEY)
-  if (turnstileVerified) {
-    headers['X-Turnstile-Verified'] = turnstileVerified
+  if (includeTurnstileVerified) {
+    const turnstileVerified = localStorage.getItem(TURNSTILE_VERIFIED_KEY)
+    if (turnstileVerified) {
+      headers['X-Turnstile-Verified'] = turnstileVerified
+    }
   }
   
   return headers

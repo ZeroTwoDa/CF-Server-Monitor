@@ -16,6 +16,8 @@ export const setTurnstileToken = (token) => {
   }
 }
 
+export const getTurnstileToken = () => localStorage.getItem(TURNSTILE_TOKEN_KEY) || ''
+
 export const clearTurnstileToken = () => {
   localStorage.removeItem(TURNSTILE_TOKEN_KEY)
 }
@@ -51,6 +53,15 @@ export const fetchAllTurnstileConfigs = async () => {
     results = await http.getAll('/api/config', { includeAuth: true, includeTurnstile: false, autoRedirect: false })
   }
   return results
+}
+
+export const fetchTurnstileConfigByIndex = async (apiIndex = 0) => {
+  return http.getByIndex('/api/config', apiIndex, {
+    includeAuth: true,
+    includeTurnstile: false,
+    includeTurnstileVerified: false,
+    autoRedirect: false
+  })
 }
 
 export const loadTurnstileScript = () => {
